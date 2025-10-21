@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>No exhibidos • Vista tipo P3</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- XLSX -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    :root { --bg:#0b0b0c; --panel:#101214; --muted:#e8e8e8; --accent:#ff7a00; --border:#2a2d32; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell; background:var(--bg); color:#fff; }
+    header { position:sticky; top:0; z-index:10; background:var(--panel); border-bottom:1px solid var(--border); }
+    .wrap { max-width:1100px; margin:0 auto; padding:16px; }
+    h1 { margin:0; font-size:18px; font-weight:700; letter-spacing:.2px; }
+    .sub { color:#c8c8c8; font-size:12px; margin-top:4px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    input[type="file"] { color:#c8c8c8; }
+    button { background:var(--accent); border:none; color:#000; font-weight:700; padding:10px 14px; border-radius:10px; cursor:pointer; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .ghost { background:transparent; color:#fff; border:1px solid var(--border); }
+    .input, .select { background:#0f1115; color:#fff; border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+    .pill { padding:6px 10px; border:1px solid var(--border); border-radius:999px; color:#cfcfcf; font-size:12px; }
+    .stat { font-weight:700; color:#fff; }
+    table { width:100%; border-collapse:collapse; margin-top:14px; border:1px solid var(--border); }
+    th, td { border-top:1px solid var(--border); border-right:1px solid var(--border); padding:8px 10px; text-align:left; }
+    th { background:#0f1115; position:sticky; top:100px; z-index:5; font-size:12px; color:#cfcfcf; }
+    td { font-size:13px; color:#eaeaea; }
+    tr:hover td { background:#141820; }
+    .muted { color:#a9a9a9; }
+    .ok { color:#79ffa7; font-weight:700; }
+    .warn { color:#ffd479; font-weight:700; }
+    .danger { color:#ff8c8c; font-weight:700; }
+    .videoWrap { position:relative; width:320px; max-width:100%; border:1px solid var(--border); border-radius:12px; overflow:hidden; display:none; }
+    video { width:100%; height:auto; display:block; background:#000; }
+    .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--border); color:#c8c8c8; }
+    .footer { padding:20px 0 40px; color:#9aa0a6; font-size:12px; }
+    .cap { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Comparativa A001 vs A006 · Vista tipo P3</h1>
+      <div class="sub">Carga el Excel, filtra y exporta. Incluye lector de código (BarcodeDetector).</div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="row" style="margin-top:10px;">
+      <input type="file" id="input-excel" accept=".xls,.xlsx" />
+      <button id="btn-procesar">Procesar</button>
+      <button id="btn-export" class="ghost" disabled>Exportar Excel (vista)</button>
+      <span id="count" class="pill">—</span>
+    </div>
+
+    <div class="toolbar">
+      <input id="q" class="input" placeholder="Buscar por código o descripción…" />
+      <button id="btn-escanear" class="ghost">Escanear código</button>
+      <span id="scan-status" class="badge">Lector: inactivo</span>
+    </div>
+
+    <div class="videoWrap" id="videoWrap">
+      <video id="video" autoplay muted playsinline></video>
+    </div>
+
+    <div id="tabla-contenedor"></div>
+
+    <div class="footer">
+      <span class="muted">Sugerencia:</span> si algún encabezado de tu Excel no coincide, ajusta <code>HEADER_ALIASES</code> en el script.
+    </div>
+  </main>
+
+  <script>
+    // ====== Configuración de encabezados equivalentes (agrega variantes si tus nombres son distintos)
+    const HEADER_ALIASES = {
+      almacen:    ["Alm.", "Almacen", "Almacén", "Almacen Origen", "Almacen Destino"],
+      clave:      ["Material", "Clave", "SKU", "Artículo", "Codigo", "Código"],
+      ean:        ["EAN", "Código de Barras", "Codigo de Barras", "Codigo Barras", "CB", "UPC"],
+      descripcion:["Descripción", "Descripcion", "Desc.", "Nombre", "Nombre Material"],
+      libre:      ["Libre Utilización", "LibreUtilizacion", "Libre Utilizacion", "Libre", "Stock Libre", "Disponible"],
+      precio:     ["Precio Venta", "Precio de Venta", "PV", "Precio", "P.Venta"],
+      proveedor:  ["Proveedor", "Nombre Proveedor", "Prov."],
+      fechaUltEnt:["Fecha Última Entrada", "Ultima Entrada", "F. Última Entrada", "Fecha Ultima Entrada", "Fecha U. Entrada", "FUE"]
+    };
+
+    const PREF_ALMACEN_A = "A001";
+    const PREF_ALMACEN_B = "A006";
+
+    const el = (id) => document.getElementById(id);
+    const $file = el("input-excel");
+    const $btnProcesar = el("btn-procesar");
+    const $btnExport = el("btn-export");
+    const $count = el("count");
+    const $q = el("q");
+    const $tabla = el("tabla-contenedor");
+    const $btnEscanear = el("btn-escanear");
+    const $scanStatus = el("scan-status");
+    const $video = el("video");
+    const $videoWrap = el("videoWrap");
+
+    let rawRows = [];
+    let normalizedRows = [];
+    let filteredRows = [];
+    let mapping = {};  // mapea alias -> nombre real en el Excel
+    let scannerActive = false;
+    let mediaStream = null;
+    let detector = null;
+
+    function norm(s){ return (s ?? "").toString().trim(); }
+    function toLowerNoAcc(s){ return norm(s).toLowerCase()
+      .normalize("NFD").replace(/\p{Diacritic}/gu,""); }
+
+    function findHeaderName(row, aliases){
+      const keys = Object.keys(row || {});
+      for (const k of keys){
+        const lk = toLowerNoAcc(k);
+        for (const a of aliases){
+          if (lk === toLowerNoAcc(a)) return k;
+        }
+      }
+      // intento parcial: si incluye
+      for (const k of keys){
+        const lk = toLowerNoAcc(k);
+        for (const a of aliases){
+          if (lk.includes(toLowerNoAcc(a))) return k;
+        }
+      }
+      return null;
+    }
+
+    function buildMapping(sampleRow){
+      const map = {};
+      for (const key in HEADER_ALIASES){
+        map[key] = findHeaderName(sampleRow, HEADER_ALIASES[key]);
+      }
+      return map;
+    }
+
+    function parseDateExcelLike(value){
+      // Acepta: fecha Excel como string, Date, número, etc.
+      // Devuelve dd/mm/aa
+      if (value == null || value === "") return "";
+      try{
+        // Si es número posible de Excel (días desde 1899-12-30)
+        if (typeof value === "number" && value > 20000 && value < 60000){
+          const epoch = new Date(Date.UTC(1899, 11, 30));
+          const ms = value * 24*60*60*1000;
+          const d = new Date(epoch.getTime() + ms);
+          return fmtDate(d);
+        }
+        // Si es Date
+        if (value instanceof Date && !isNaN(value)) return fmtDate(value);
+        // Si es string
+        const s = String(value).trim();
+        if (!s) return "";
+        // Intenta varias formas: yyyy-mm-dd, dd/mm/yyyy, mm/dd/yyyy, etc.
+        // Normaliza separadores
+        const t = s.replace(/[.]/g,"/").replace(/-/g,"/");
+        // Si incluye hora, toma solo fecha
+        const only = t.split(" ")[0];
+        const parts = only.split("/");
+        let d;
+        if (parts.length === 3){
+          // heurística: si primera parte > 12 => dd/mm/yyyy
+          let dd, mm, yyyy;
+          if (parseInt(parts[0],10) > 12){
+            dd = parseInt(parts[0],10); mm = parseInt(parts[1],10); yyyy = parseInt(parts[2],10);
+          } else if (parseInt(parts[1],10) > 12) {
+            // mm/dd/yyyy
+            mm = parseInt(parts[0],10); dd = parseInt(parts[1],10); yyyy = parseInt(parts[2],10);
+          } else {
+            // por defecto interpreta dd/mm/yyyy
+            dd = parseInt(parts[0],10); mm = parseInt(parts[1],10); yyyy = parseInt(parts[2],10);
+          }
+          if (yyyy < 100) yyyy += 2000;
+          d = new Date(yyyy, mm-1, dd);
+          if (!isNaN(d)) return fmtDate(d);
+        }
+        // Intento general
+        const d2 = new Date(s);
+        if (!isNaN(d2)) return fmtDate(d2);
+      } catch(e){}
+      return "";
+    }
+
+    function fmtDate(d){
+      const dd = String(d.getDate()).padStart(2,"0");
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const aa = String(d.getFullYear()).slice(-2);
+      return `${dd}/${mm}/${aa}`;
+    }
+
+    function computeNoExhibidos(rows){
+      const mAlm = mapping.almacen, mClave = mapping.clave;
+      if (!mAlm || !mClave){
+        alert("No se localizaron columnas de 'Almacén' y/o 'Material'. Ajusta HEADER_ALIASES.");
+        return [];
+      }
+      const a = rows.filter(r => toLowerNoAcc(r[mAlm]) === toLowerNoAcc(PREF_ALMACEN_A));
+      const b = rows.filter(r => toLowerNoAcc(r[mAlm]) === toLowerNoAcc(PREF_ALMACEN_B));
+      const setB = new Set(b.map(r => norm(r[mClave])));
+      const notInB = a.filter(r => !setB.has(norm(r[mClave])));
+      return notInB;
+    }
+
+    function normalizeForView(rows){
+      const {
+        ean, descripcion, libre, precio, proveedor, fechaUltEnt, clave
+      } = mapping;
+
+      return rows.map(r => {
+        const codigo = norm(ean ? r[ean] : (clave ? r[clave] : ""));
+        const desc = norm(descripcion ? r[descripcion] : "");
+        const libreVal = r[libre] ?? "";
+        const precioVal = r[precio] ?? "";
+        const prov = norm(proveedor ? r[proveedor] : "");
+        const fecha = parseDateExcelLike(r[fechaUltEnt]);
+
+        return {
+          "Código de barras": codigo,
+          "Descripción": desc,
+          "Libre utilización": typeof libreVal === "number" ? libreVal : norm(libreVal),
+          "Precio de venta": typeof precioVal === "number" ? precioVal : norm(precioVal),
+          "Proveedor": prov,
+          "Última entrada (dd/mm/aa)": fecha
+        };
+      });
+    }
+
+    function renderTable(rows){
+      if (!rows.length){
+        $tabla.innerHTML = `<p class="muted">No hay artículos para mostrar.</p>`;
+        $btnExport.disabled = true;
+        $count.textContent = "—";
+        return;
+      }
+      const cols = Object.keys(rows[0]);
+      let html = `<table><thead><tr>`;
+      for (const c of cols) html += `<th>${c}</th>`;
+      html += `</tr></thead><tbody>`;
+      for (const row of rows){
+        html += `<tr>`;
+        for (const c of cols){
+          let v = row[c];
+          if (typeof v === "number") {
+            // formateo ligero para precio; si la columna se llama Precio de venta
+            if (c.toLowerCase().includes("precio")) {
+              v = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(v);
+            }
+          }
+          html += `<td class="cap">${v ?? ""}</td>`;
+        }
+        html += `</tr>`;
+      }
+      html += `</tbody></table>`;
+      $tabla.innerHTML = html;
+      $btnExport.disabled = false;
+      $count.innerHTML = `🔎 <span class="stat">${rows.length}</span> artículos (A001 que NO están en A006)`;
+    }
+
+    function exportCurrent(){
+      if (!filteredRows.length) return;
+      const ws = XLSX.utils.json_to_sheet(filteredRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "No_exhibidos_P3");
+      XLSX.writeFile(wb, "No_exhibidos_P3.xlsx");
+    }
+
+    function applyFilter(){
+      const term = toLowerNoAcc($q.value);
+      if (!term){
+        filteredRows = [...normalizedRows];
+      } else {
+        filteredRows = normalizedRows.filter(r => {
+          const code = toLowerNoAcc(r["Código de barras"]);
+          const desc = toLowerNoAcc(r["Descripción"]);
+          return code.includes(term) || desc.includes(term);
+        });
+      }
+      renderTable(filteredRows);
+    }
+
+    // ====== Lector de código de barras
+    async function startScanner(){
+      if (scannerActive) return stopScanner();
+      try{
+        // BarcodeDetector soporta 'ean-13', 'ean-8', 'code-128', etc.
+        if ('BarcodeDetector' in window){
+          detector = new BarcodeDetector({ formats: ['ean-13','ean-8','code-128','code-39','upc-a','upc-e','itf'] });
+        } else {
+          detector = null; // sin soporte: fallback a input
+        }
+
+        if (!detector){
+          alert("Tu navegador no soporta BarcodeDetector. Usa el cuadro de búsqueda para escribir o pegar el código.");
+          return;
+        }
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio:false });
+        $video.srcObject = mediaStream;
+        $videoWrap.style.display = "block";
+        scannerActive = true;
+        $scanStatus.textContent = "Lector: activo";
+        loopScan();
+      } catch (e){
+        alert("No se pudo activar la cámara. Verifica permisos.");
+        stopScanner();
+      }
+    }
+
+    async function loopScan(){
+      if (!scannerActive || !detector) return;
+      try{
+        const barcodes = await detector.detect($video);
+        if (barcodes && barcodes.length){
+          const value = (barcodes[0].rawValue || "").trim();
+          if (value){
+            $q.value = value;
+            applyFilter();
+            // vibración breve (si soporta) y luego detener
+            if (navigator.vibrate) navigator.vibrate(50);
+            stopScanner();
+            return;
+          }
+        }
+      } catch(e){}
+      requestAnimationFrame(loopScan);
+    }
+
+    function stopScanner(){
+      scannerActive = false;
+      if (mediaStream){
+        mediaStream.getTracks().forEach(t => t.stop());
+        mediaStream = null;
+      }
+      $video.srcObject = null;
+      $videoWrap.style.display = "none";
+      $scanStatus.textContent = "Lector: inactivo";
+    }
+
+    // ====== Eventos
+    $btnProcesar.addEventListener("click", () => {
+      const archivo = $file.files?.[0];
+      if (!archivo) { alert("Selecciona un archivo Excel"); return; }
+
+      const lector = new FileReader();
+      lector.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: 'array', cellDates:true });
+        const hoja = wb.Sheets[wb.SheetNames[0]];
+        rawRows = XLSX.utils.sheet_to_json(hoja, { defval:"" });
+
+        if (!rawRows.length){
+          alert("La hoja está vacía.");
+          return;
+        }
+        mapping = buildMapping(rawRows[0]);
+        const noExhibidos = computeNoExhibidos(rawRows);
+        normalizedRows = normalizeForView(noExhibidos);
+        filteredRows = [...normalizedRows];
+        renderTable(filteredRows);
+      };
+      lector.readAsArrayBuffer(archivo);
+    });
+
+    $btnExport.addEventListener("click", exportCurrent);
+    $q.addEventListener("input", applyFilter);
+    $btnEscanear.addEventListener("click", startScanner);
+    window.addEventListener("beforeunload", stopScanner);
+  </script>
+</body>
+</html>
