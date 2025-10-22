@@ -283,32 +283,58 @@
     }
 
     // ====== Lector de código de barras
-    async function startScanner(){
+    async function startScanner() {
       if (scannerActive) return stopScanner();
-      try{
-        // BarcodeDetector soporta 'ean-13', 'ean-8', 'code-128', etc.
-        if ('BarcodeDetector' in window){
-          detector = new BarcodeDetector({ formats: ['ean-13','ean-8','code-128','code-39','upc-a','upc-e','itf'] });
-        } else {
-          detector = null; // sin soporte: fallback a input
-        }
 
-        if (!detector){
-          alert("Tu navegador no soporta BarcodeDetector. Usa el cuadro de búsqueda para escribir o pegar el código.");
+      try {
+        // Verifica si el navegador tiene acceso a la API
+        if (!("mediaDevices" in navigator) || !("getUserMedia" in navigator.mediaDevices)) {
+          alert("Tu navegador no permite acceso a la cámara.");
           return;
         }
 
-        mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio:false });
+        // Intenta crear detector (si no hay soporte, lo avisa)
+        if ("BarcodeDetector" in window) {
+          detector = new BarcodeDetector({ 
+            formats: ['ean-13', 'ean-8', 'code-128', 'code-39', 'upc-a', 'upc-e', 'itf'] 
+          });
+        } else {
+          alert("Tu navegador no soporta BarcodeDetector. Usa el buscador manual.");
+          return;
+        }
+
+        // 🔹 Solicita acceso a la cámara explícitamente
+        console.log("Solicitando permisos de cámara...");
+        mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+
+        // Si llega aquí, el permiso fue concedido ✅
+        console.log("Cámara activada correctamente.");
         $video.srcObject = mediaStream;
         $videoWrap.style.display = "block";
         scannerActive = true;
         $scanStatus.textContent = "Lector: activo";
+
+        // Inicia el ciclo de detección
         loopScan();
-      } catch (e){
-        alert("No se pudo activar la cámara. Verifica permisos.");
+
+      } catch (err) {
+        console.error("Error al activar la cámara:", err);
+
+        // Muestra mensaje más claro según el tipo de error
+        if (err.name === "NotAllowedError") {
+          alert("No se pudo activar la cámara: el acceso fue denegado. Verifica permisos en tu navegador.");
+        } else if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
+          alert("No se encontró ninguna cámara disponible o no cumple los requisitos.");
+        } else if (err.name === "NotReadableError") {
+          alert("La cámara está en uso por otra aplicación.");
+        } else {
+          alert("No se pudo activar la cámara. Detalle en consola:\n" + err.message);
+        }
+
         stopScanner();
       }
     }
+
 
     async function loopScan(){
       if (!scannerActive || !detector) return;
