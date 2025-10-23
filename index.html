@@ -19,8 +19,7 @@
     button { background:var(--accent); border:none; color:#000; font-weight:700; padding:10px 14px; border-radius:10px; cursor:pointer; }
     button:disabled { opacity:.5; cursor:not-allowed; }
     .ghost { background:transparent; color:#fff; border:1px solid var(--border); }
-    .input, .select { background:#0f1115; color:#fff; border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
-    .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+    .input { background:#0f1115; color:#fff; border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
     .pill { padding:6px 10px; border:1px solid var(--border); border-radius:999px; color:#cfcfcf; font-size:12px; }
     .stat { font-weight:700; color:#fff; }
     table { width:100%; border-collapse:collapse; margin-top:14px; border:1px solid var(--border); }
@@ -29,12 +28,9 @@
     td { font-size:13px; color:#eaeaea; }
     tr:hover td { background:#141820; }
     .muted { color:#a9a9a9; }
-    .ok { color:#79ffa7; font-weight:700; }
-    .warn { color:#ffd479; font-weight:700; }
-    .danger { color:#ff8c8c; font-weight:700; }
+    .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--border); color:#c8c8c8; }
     .videoWrap { position:relative; width:320px; max-width:100%; border:1px solid var(--border); border-radius:12px; overflow:hidden; display:none; }
     video { width:100%; height:auto; display:block; background:#000; }
-    .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--border); color:#c8c8c8; }
     .footer { padding:20px 0 40px; color:#9aa0a6; font-size:12px; }
     .cap { font-variant-numeric: tabular-nums; }
   </style>
@@ -43,7 +39,7 @@
   <header>
     <div class="wrap">
       <h1>Comparativa A001 vs A006 · Vista tipo P3</h1>
-      <div class="sub">Carga el Excel, filtra y exporta. Incluye lector de código (BarcodeDetector).</div>
+      <div class="sub">Carga el Excel, filtra y exporta. Incluye lector de código (BarcodeDetector con autodetección de formatos).</div>
     </div>
   </header>
 
@@ -55,7 +51,7 @@
       <span id="count" class="pill">—</span>
     </div>
 
-    <div class="toolbar">
+    <div class="row" style="gap:8px; margin-top:12px;">
       <input id="q" class="input" placeholder="Buscar por código o descripción…" />
       <button id="btn-escanear" class="ghost">Escanear código</button>
       <span id="scan-status" class="badge">Lector: inactivo</span>
@@ -73,10 +69,10 @@
   </main>
 
   <script>
-    // ====== Configuración de encabezados equivalentes (agrega variantes si tus nombres son distintos)
+    // ====== Encabezados equivalentes (puedes añadir variantes)
     const HEADER_ALIASES = {
-      almacen:    ["Alm.", "Almacen", "Almacén", "Almacen Origen", "Almacen Destino"],
-      clave:      ["Material", "Clave", "SKU", "Artículo", "Codigo", "Código"],
+      almacen:    ["Almacen", "Almacén", "Almacen Origen", "Almacen Destino", "Alm.", "Alm"],
+      clave:      ["Material", "Clave", "SKU", "Artículo", "Articulo", "Codigo", "Código"],
       ean:        ["EAN", "Código de Barras", "Codigo de Barras", "Codigo Barras", "CB", "UPC"],
       descripcion:["Descripción", "Descripcion", "Desc.", "Nombre", "Nombre Material"],
       libre:      ["Libre Utilización", "LibreUtilizacion", "Libre Utilizacion", "Libre", "Stock Libre", "Disponible"],
@@ -103,14 +99,20 @@
     let rawRows = [];
     let normalizedRows = [];
     let filteredRows = [];
-    let mapping = {};  // mapea alias -> nombre real en el Excel
+    let mapping = {};
     let scannerActive = false;
     let mediaStream = null;
     let detector = null;
 
     function norm(s){ return (s ?? "").toString().trim(); }
-    function toLowerNoAcc(s){ return norm(s).toLowerCase()
-      .normalize("NFD").replace(/\p{Diacritic}/gu,""); }
+    function toLowerNoAcc(s){ return norm(s).toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu,""); }
+    function onlyDigits(s=""){ return String(s).replace(/\D+/g,""); }
+
+    // Normaliza EAN/UPC a solo dígitos (8/12/13/14)
+    function normalizeEAN(raw=""){
+      const d = onlyDigits(raw);
+      return [8,12,13,14].includes(d.length) ? d : d || "";
+    }
 
     function findHeaderName(row, aliases){
       const keys = Object.keys(row || {});
@@ -120,7 +122,6 @@
           if (lk === toLowerNoAcc(a)) return k;
         }
       }
-      // intento parcial: si incluye
       for (const k of keys){
         const lk = toLowerNoAcc(k);
         for (const a of aliases){
@@ -139,46 +140,34 @@
     }
 
     function parseDateExcelLike(value){
-      // Acepta: fecha Excel como string, Date, número, etc.
-      // Devuelve dd/mm/aa
       if (value == null || value === "") return "";
       try{
-        // Si es número posible de Excel (días desde 1899-12-30)
         if (typeof value === "number" && value > 20000 && value < 60000){
           const epoch = new Date(Date.UTC(1899, 11, 30));
-          const ms = value * 24*60*60*1000;
+          const ms = value * 86400000;
           const d = new Date(epoch.getTime() + ms);
           return fmtDate(d);
         }
-        // Si es Date
         if (value instanceof Date && !isNaN(value)) return fmtDate(value);
-        // Si es string
         const s = String(value).trim();
         if (!s) return "";
-        // Intenta varias formas: yyyy-mm-dd, dd/mm/yyyy, mm/dd/yyyy, etc.
-        // Normaliza separadores
         const t = s.replace(/[.]/g,"/").replace(/-/g,"/");
-        // Si incluye hora, toma solo fecha
         const only = t.split(" ")[0];
         const parts = only.split("/");
         let d;
         if (parts.length === 3){
-          // heurística: si primera parte > 12 => dd/mm/yyyy
           let dd, mm, yyyy;
           if (parseInt(parts[0],10) > 12){
-            dd = parseInt(parts[0],10); mm = parseInt(parts[1],10); yyyy = parseInt(parts[2],10);
-          } else if (parseInt(parts[1],10) > 12) {
-            // mm/dd/yyyy
-            mm = parseInt(parts[0],10); dd = parseInt(parts[1],10); yyyy = parseInt(parts[2],10);
+            dd = +parts[0]; mm = +parts[1]; yyyy = +parts[2];
+          } else if (parseInt(parts[1],10) > 12){
+            mm = +parts[0]; dd = +parts[1]; yyyy = +parts[2];
           } else {
-            // por defecto interpreta dd/mm/yyyy
-            dd = parseInt(parts[0],10); mm = parseInt(parts[1],10); yyyy = parseInt(parts[2],10);
+            dd = +parts[0]; mm = +parts[1]; yyyy = +parts[2];
           }
           if (yyyy < 100) yyyy += 2000;
           d = new Date(yyyy, mm-1, dd);
           if (!isNaN(d)) return fmtDate(d);
         }
-        // Intento general
         const d2 = new Date(s);
         if (!isNaN(d2)) return fmtDate(d2);
       } catch(e){}
@@ -201,15 +190,11 @@
       const a = rows.filter(r => toLowerNoAcc(r[mAlm]) === toLowerNoAcc(PREF_ALMACEN_A));
       const b = rows.filter(r => toLowerNoAcc(r[mAlm]) === toLowerNoAcc(PREF_ALMACEN_B));
       const setB = new Set(b.map(r => norm(r[mClave])));
-      const notInB = a.filter(r => !setB.has(norm(r[mClave])));
-      return notInB;
+      return a.filter(r => !setB.has(norm(r[mClave])));
     }
 
     function normalizeForView(rows){
-      const {
-        ean, descripcion, libre, precio, proveedor, fechaUltEnt, clave
-      } = mapping;
-
+      const { ean, descripcion, libre, precio, proveedor, fechaUltEnt, clave } = mapping;
       return rows.map(r => {
         const codigo = norm(ean ? r[ean] : (clave ? r[clave] : ""));
         const desc = norm(descripcion ? r[descripcion] : "");
@@ -217,9 +202,8 @@
         const precioVal = r[precio] ?? "";
         const prov = norm(proveedor ? r[proveedor] : "");
         const fecha = parseDateExcelLike(r[fechaUltEnt]);
-
         return {
-          "Código de barras": codigo,
+          "Código de barras": normalizeEAN(codigo) || codigo,
           "Descripción": desc,
           "Libre utilización": typeof libreVal === "number" ? libreVal : norm(libreVal),
           "Precio de venta": typeof precioVal === "number" ? precioVal : norm(precioVal),
@@ -244,11 +228,8 @@
         html += `<tr>`;
         for (const c of cols){
           let v = row[c];
-          if (typeof v === "number") {
-            // formateo ligero para precio; si la columna se llama Precio de venta
-            if (c.toLowerCase().includes("precio")) {
-              v = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(v);
-            }
+          if (typeof v === "number" && c.toLowerCase().includes("precio")) {
+            v = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(v);
           }
           html += `<td class="cap">${v ?? ""}</td>`;
         }
@@ -282,71 +263,88 @@
       renderTable(filteredRows);
     }
 
-    // ====== Lector de código de barras
-    async function startScanner() {
+    // ====== LECTOR DE CÓDIGO (con autodetección de formatos)
+    async function tryConstructDetector(){
+      // 1) Usar formatos soportados por el navegador (si los expone)
+      if (window.BarcodeDetector?.getSupportedFormats){
+        try {
+          const supported = await window.BarcodeDetector.getSupportedFormats();
+          console.log("Formatos soportados por el navegador:", supported);
+          if (Array.isArray(supported) && supported.length){
+            return new window.BarcodeDetector({ formats: supported });
+          }
+        } catch(e){}
+      }
+      // 2) Intentar sin opciones (algunos aceptan ctor vacío)
+      try { return new window.BarcodeDetector(); } catch(e){}
+      // 3) Intentar set conservador (ampliamente admitido)
+      const conservative = ["qr_code","pdf417","aztec","data_matrix","codabar"];
+      try { return new window.BarcodeDetector({ formats: conservative }); } catch(e){}
+      // Nada funcionó
+      return null;
+    }
+
+    async function startScanner(){
       if (scannerActive) return stopScanner();
-    
-      try {
+      try{
         if (!("mediaDevices" in navigator) || !("getUserMedia" in navigator.mediaDevices)) {
           alert("Tu navegador no permite acceso a la cámara.");
           return;
         }
-    
-        if ("BarcodeDetector" in window) {
-          // 🔍 Detecta formatos soportados por el navegador
-          const supported = await BarcodeDetector.getSupportedFormats();
-          console.log("Formatos soportados:", supported);
-    
-          // Usa solo los disponibles
-          detector = new BarcodeDetector({ formats: supported });
-        } else {
+        if (!("BarcodeDetector" in window)) {
           alert("Tu navegador no soporta BarcodeDetector. Usa el buscador manual.");
           return;
         }
-    
-        console.log("Solicitando permisos de cámara...");
-        mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
-    
-        console.log("Cámara activada correctamente.");
+
+        detector = await tryConstructDetector();
+        if (!detector){
+          alert("No fue posible inicializar el lector en este navegador.");
+          return;
+        }
+
+        console.log("Solicitando permisos de cámara…");
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
+        });
+
         $video.srcObject = mediaStream;
+        $video.setAttribute("playsinline","true");
+        await $video.play();
+
         $videoWrap.style.display = "block";
         scannerActive = true;
         $scanStatus.textContent = "Lector: activo";
-    
+
         loopScan();
-    
-      } catch (err) {
+      } catch (err){
         console.error("Error al activar la cámara:", err);
-    
-        if (err.name === "NotAllowedError") {
-          alert("Acceso a la cámara denegado. Verifica permisos del navegador.");
-        } else if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
-          alert("No se encontró ninguna cámara o no cumple los requisitos.");
-        } else if (err.name === "NotReadableError") {
-          alert("La cámara está en uso por otra aplicación.");
-        } else if (err.message.includes("BarcodeDetector")) {
-          alert("Tu navegador no reconoce los formatos de código de barras disponibles. Usa el buscador manual.");
+        if (err?.name === "NotAllowedError"){
+          alert("Acceso a la cámara denegado. Revisa permisos del navegador.");
+        } else if (err?.name === "NotFoundError" || err?.name === "OverconstrainedError"){
+          alert("No se encontró cámara disponible o no cumple requisitos.");
+        } else if (err?.name === "NotReadableError"){
+          alert("La cámara está en uso por otra app.");
         } else {
           alert("No se pudo activar la cámara. Detalle en consola:\n" + err.message);
         }
-    
         stopScanner();
       }
     }
 
-
     async function loopScan(){
       if (!scannerActive || !detector) return;
       try{
-        const barcodes = await detector.detect($video);
-        if (barcodes && barcodes.length){
-          const value = (barcodes[0].rawValue || "").trim();
-          if (value){
-            $q.value = value;
+        const codes = await detector.detect($video);
+        const now = Date.now();
+        if (codes && codes.length){
+          const raw = codes[0].rawValue || "";
+          const normalized = normalizeEAN(raw);
+          if (normalized){
+            $q.value = normalized;
             applyFilter();
-            // vibración breve (si soporta) y luego detener
             if (navigator.vibrate) navigator.vibrate(50);
-            stopScanner();
+            stopScanner(); // auto-stop tras leer
             return;
           }
         }
@@ -356,10 +354,12 @@
 
     function stopScanner(){
       scannerActive = false;
+      try { $video.pause(); } catch(e){}
       if (mediaStream){
-        mediaStream.getTracks().forEach(t => t.stop());
+        try { mediaStream.getTracks().forEach(t => t.stop()); } catch(e){}
         mediaStream = null;
       }
+      detector = null;
       $video.srcObject = null;
       $videoWrap.style.display = "none";
       $scanStatus.textContent = "Lector: inactivo";
@@ -369,7 +369,6 @@
     $btnProcesar.addEventListener("click", () => {
       const archivo = $file.files?.[0];
       if (!archivo) { alert("Selecciona un archivo Excel"); return; }
-
       const lector = new FileReader();
       lector.onload = (e) => {
         const data = new Uint8Array(e.target.result);
