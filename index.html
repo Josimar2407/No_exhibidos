@@ -284,18 +284,21 @@
 
     // ====== Lector de código de barras
     async function startScanner() {
-    if (scannerActive) return stopScanner();
+      if (scannerActive) return stopScanner();
+    
       try {
         if (!("mediaDevices" in navigator) || !("getUserMedia" in navigator.mediaDevices)) {
           alert("Tu navegador no permite acceso a la cámara.");
           return;
         }
     
-        // ✅ Formatos compatibles (sin guiones)
         if ("BarcodeDetector" in window) {
-          detector = new BarcodeDetector({ 
-            formats: ['ean13', 'ean8', 'code128', 'code39', 'upcA', 'upcE', 'itf']
-          });
+          // 🔍 Detecta formatos soportados por el navegador
+          const supported = await BarcodeDetector.getSupportedFormats();
+          console.log("Formatos soportados:", supported);
+    
+          // Usa solo los disponibles
+          detector = new BarcodeDetector({ formats: supported });
         } else {
           alert("Tu navegador no soporta BarcodeDetector. Usa el buscador manual.");
           return;
@@ -313,19 +316,24 @@
         loopScan();
     
       } catch (err) {
-      console.error("Error al activar la cámara:", err);
-      if (err.name === "NotAllowedError") {
-        alert("No se pudo activar la cámara: el acceso fue denegado. Verifica permisos en tu navegador.");
-      } else if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
-        alert("No se encontró ninguna cámara disponible o no cumple los requisitos.");
-      } else if (err.name === "NotReadableError") {
-        alert("La cámara está en uso por otra aplicación.");
-      } else {
-        alert("No se pudo activar la cámara. Detalle en consola:\n" + err.message);
-      }
+        console.error("Error al activar la cámara:", err);
+    
+        if (err.name === "NotAllowedError") {
+          alert("Acceso a la cámara denegado. Verifica permisos del navegador.");
+        } else if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
+          alert("No se encontró ninguna cámara o no cumple los requisitos.");
+        } else if (err.name === "NotReadableError") {
+          alert("La cámara está en uso por otra aplicación.");
+        } else if (err.message.includes("BarcodeDetector")) {
+          alert("Tu navegador no reconoce los formatos de código de barras disponibles. Usa el buscador manual.");
+        } else {
+          alert("No se pudo activar la cámara. Detalle en consola:\n" + err.message);
+        }
+    
         stopScanner();
       }
     }
+
 
     async function loopScan(){
       if (!scannerActive || !detector) return;
